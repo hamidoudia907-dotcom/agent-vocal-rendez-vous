@@ -1,0 +1,145 @@
+{
+  "name": "Vapi - Création RDV",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -304,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creer-rdv",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9acfadd1-b04d-492d-8a0b-5f1fa8838038"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        640,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $('Code in JavaScript').first().json.toolCallId, result: \"Rendez-vous créé avec succès. Le SMS de confirmation a déjà été envoyé au patient. NE PAS rappeler cet outil. Le processus est terminé.\" }] }) }}",
+        "options": {}
+      },
+      "id": "33e31c3c-61a9-4d29-820d-e87a0f75420b"
+    },
+    {
+      "name": "Create an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        0
+      ],
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "list",
+          "cachedResultName": "courriel@exemple.ca"
+        },
+        "start": "={{ $json.jour }}T{{ $json.heure }}:00",
+        "end": "={{ $json.jour }}T{{ $json.fin }}:00",
+        "additionalFields": {
+          "description": "=Patient: {{ $json.nom }}\nDate de naissance: {{ $json.date_naissance }}\nTéléphone: {{ $json.telephone }}\nRaison: {{ $json.raison }}\nCréé via: Agent IA Cadence Numérique",
+          "summary": "=RDV - {{ $json.nom }} - {{ $json.raison }}"
+        }
+      },
+      "id": "977c6982-0c35-49b2-a228-8fd1b0b347a2"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nconst args = body.message?.toolCalls?.[0]?.function?.arguments || {};\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\nconst nom = args.nom || \"\";\nconst date_naissance = args.date_naissance || \"\";\nconst telephone = args.telephone || \"\";\nconst raison = args.raison || \"\";\nconst jourBrut = args.jour || \"\";\nconst heureBrut = args.heure || \"\";\n\n// Formater le téléphone\nlet tel = telephone.replace(/\\D/g, '');\nif (tel.length === 10) tel = \"+1\" + tel;\nelse if (tel.length === 11 && tel.startsWith(\"1\")) tel = \"+\" + tel;\nelse if (!tel.startsWith(\"+\")) tel = \"+1\" + tel;\n\n// Parser l'heure : \"14h00\", \"14:00\", \"9h30\", \"09h00\" → \"HH:MM\"\nlet heure = heureBrut.replace('h', ':').replace('H', ':');\nif (!heure.includes(':')) heure = heure + ':00';\nconst [h, m] = heure.split(':');\nconst heureISO = h.padStart(2, '0') + ':' + (m || '00').padStart(2, '0');\n\n// Parser le jour français en date ISO\nconst joursFR = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];\nconst moisFR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];\n\nfunction parseJourFR(texte) {\n const lower = texte.toLowerCase().trim();\n const now = new Date();\n \n // \"2026-05-19\" déjà en ISO\n if (/^\\d{4}-\\d{2}-\\d{2}$/.test(lower)) return lower;\n \n // \"19 mai\", \"19 mai 2026\", \"le 19 mai\"\n const matchDateMois = lower.match(/(\\d{1,2})\\s+(janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)(?:\\s+(\\d{4}))?/);\n if (matchDateMois) {\n const jour = parseInt(matchDateMois[1]);\n const mois = moisFR.indexOf(matchDateMois[2]);\n const annee = matchDateMois[3] ? parseInt(matchDateMois[3]) : now.getFullYear();\n const d = new Date(annee, mois, jour);\n return d.toISOString().split('T')[0];\n }\n \n // \"lundi\", \"mardi prochain\", \"lundi dans 2 semaines\"\n const matchJour = lower.match(/(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)/);\n if (matchJour) {\n const jourCible = joursFR.indexOf(matchJour[1]);\n let diff = jourCible - now.getDay();\n if (diff <= 0) diff += 7;\n \n // \"dans 2 semaines\", \"dans 3 semaines\"\n const matchSemaines = lower.match(/dans\\s+(\\d+)\\s+semaine/);\n if (matchSemaines) {\n diff += (parseInt(matchSemaines[1]) - 1) * 7;\n }\n // \"prochain\" = semaine prochaine si c'est le même jour\n if (lower.includes('prochain') && diff === 7) diff = 7;\n \n const d = new Date(now);\n d.setDate(d.getDate() + diff);\n return d.toISOString().split('T')[0];\n }\n \n // \"demain\"\n if (lower.includes('demain')) {\n const d = new Date(now);\n d.setDate(d.getDate() + 1);\n return d.toISOString().split('T')[0];\n }\n \n // \"aujourd'hui\"\n if (lower.includes(\"aujourd\")) {\n return now.toISOString().split('T')[0];\n }\n \n // Dernier recours : retourner le texte tel quel\n return lower;\n}\n\nconst jourISO = parseJourFR(jourBrut);\n\n// Calculer la fin (30 min après)\nconst startDate = new Date(jourISO + 'T' + heureISO + ':00');\nconst endDate = new Date(startDate.getTime() + 60 * 60000);\nconst pad = (n) => String(n).padStart(2, '0');\nconst finISO = pad(endDate.getHours()) + ':' + pad(endDate.getMinutes());\n\nreturn [{\n json: {\n nom,\n date_naissance,\n telephone: tel,\n raison,\n jour: jourISO,\n heure: heureISO,\n fin: finISO,\n toolCallId\n }\n}];"
+      },
+      "id": "a88aaf45-78fe-4107-ae26-5e983ee44aa7"
+    },
+    {
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "parameters": {
+        "from": "+15555550100",
+        "to": "={{ $('Code in JavaScript').first().json.telephone }}",
+        "toWhatsapp": "",
+        "message": "=Bonjour {{ $('Code in JavaScript').first().json.nom }}, votre rendez-vous à la Clinique Dentaire Exemple est confirmé pour le {{ $('Code in JavaScript').first().json.jour }} à {{ $('Code in JavaScript').first().json.heure }}. Pour annuler ou modifier, appelez le (555) 555-0100. Merci!",
+        "options": {}
+      },
+      "id": "f35585dd-5128-4b98-ad9d-b064531cf7d1"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "Create an event": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

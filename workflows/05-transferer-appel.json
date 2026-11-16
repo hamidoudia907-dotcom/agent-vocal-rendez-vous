@@ -1,0 +1,138 @@
+{
+  "name": "Transférer Appel",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -464,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "transferer-appel",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "fae87aac-db89-49c0-a46f-e06a0779696b"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\nconst args = body.message?.toolCalls?.[0]?.function?.arguments || {};\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\nconst raison_transfert = args.raison_transfert || \"Non spécifiée\";\n\n// Infos du patient depuis le message Vapi\nconst nom = args.nom || \"Patient inconnu\";\nconst telephone = args.telephone || \"\";\n\n// Formater le téléphone\nlet tel = telephone.replace(/\\D/g, \"\");\nif (tel.length === 10) tel = \"+1\" + tel;\nelse if (tel.length === 11 && tel.startsWith(\"1\")) tel = \"+\" + tel;\nelse if (!tel.startsWith(\"+\")) tel = \"+1\" + tel;\n\n// Créer un créneau dans 30 min pour le rappel\nconst now = new Date();\nconst debut = new Date(now.getTime() + 30 * 60000);\nconst fin = new Date(debut.getTime() + 15 * 60000);\n\nconst pad = (n) => String(n).padStart(2, \"0\");\nconst debutISO = `${debut.getFullYear()}-${pad(debut.getMonth()+1)}-${pad(debut.getDate())}T${pad(debut.getHours())}:${pad(debut.getMinutes())}:00`;\nconst finISO = `${fin.getFullYear()}-${pad(fin.getMonth()+1)}-${pad(fin.getDate())}T${pad(fin.getHours())}:${pad(fin.getMinutes())}:00`;\n\nreturn [{\n json: {\n raison_transfert,\n nom,\n telephone: tel,\n debut: debutISO,\n fin: finISO,\n toolCallId\n }\n}];"
+      },
+      "id": "eaa118f3-3ce4-4c7f-acf9-3bf1d1964070"
+    },
+    {
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        0
+      ],
+      "parameters": {
+        "from": "+15555550100",
+        "to": "+15555550199",
+        "message": "=🔔 TRANSFERT DEMANDÉ Patient : {{ $json.nom }} Téléphone : {{ $json.telephone }} Raison : {{ $json.raison_transfert }} Le patient a demandé à parler à un humain. Veuillez le rappeler dès que possible. — Agent IA Cadence Numérique",
+        "options": {}
+      },
+      "id": "1c31352b-c91c-4b27-879f-9b59db34b7bb"
+    },
+    {
+      "name": "Create an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        160,
+        0
+      ],
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "start": "={{ $('Code in JavaScript').first().json.debut }}",
+        "end": "={{ $('Code in JavaScript').first().json.fin }}",
+        "additionalFields": {
+          "description": "=Transfert demandé par le patient. Nom : {{ $('Code in JavaScript').first().json.nom }} Téléphone : {{ $('Code in JavaScript').first().json.telephone }} Raison : {{ $('Code in JavaScript').first().json.raison_transfert }} Action requise : rappeler le patient. Créé via : Agent IA Cadence Numérique",
+          "summary": "=TRANSFERT - {{ $('Code in JavaScript').first().json.nom }} - {{ $('Code in JavaScript').first().json.raison_transfert }}"
+        }
+      },
+      "id": "e7fb1793-15a9-47df-a59c-175bf2e25c02"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        368,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $('Code in JavaScript').first().json.toolCallId, result: \"Le transfert a été enregistré. L'équipe de la clinique a été notifiée par SMS et un rappel a été ajouté au calendrier. Un membre de l'équipe rappellera le patient dans les plus brefs délais.\" }] }) }}",
+        "options": {}
+      },
+      "id": "dd8c7ea8-ba83-4de9-be16-a5b1a18241cb"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

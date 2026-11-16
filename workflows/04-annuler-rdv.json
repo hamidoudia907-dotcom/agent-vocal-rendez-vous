@@ -1,0 +1,195 @@
+{
+  "name": "annuler-rdv",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -656,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "annuler-rdv",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e4daee23-a976-449e-b41d-0ed3d69c2af3"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -96
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\n\nconst nom = body.message?.toolCalls?.[0]?.function?.arguments?.nom || \"\";\nconst telephone = body.message?.toolCalls?.[0]?.function?.arguments?.telephone || \"\";\nconst date_rdv = body.message?.toolCalls?.[0]?.function?.arguments?.date_rdv || \"\";\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\nconst telClean = telephone.replace(/\\D/g, '');\n\nreturn [{\n json: {\n nom: nom,\n telephone: telephone,\n telClean: telClean,\n date_rdv: date_rdv,\n toolCallId: toolCallId\n }\n}];"
+      },
+      "id": "9d49f9db-1d68-4201-966e-80ffbc6f20c4"
+    },
+    {
+      "name": "Get many events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -208,
+        32
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "list",
+          "cachedResultName": "courriel@exemple.ca"
+        },
+        "limit": 20,
+        "timeMax": "={{ $now.plus({ month: 3 }) }}",
+        "options": {
+          "query": "={{ $json.telClean }}"
+        }
+      },
+      "id": "172aa87e-9242-41ce-b874-0ee1505508c3"
+    },
+    {
+      "name": "Delete an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        192,
+        -32
+      ],
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "list",
+          "cachedResultName": "courriel@exemple.ca"
+        },
+        "eventId": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "b009e3b8-8faa-44ae-a0b6-8742608c5bfd"
+    },
+    {
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        336,
+        112
+      ],
+      "parameters": {
+        "from": "+15555550100",
+        "to": "={{ $('Code in JavaScript').item.json.telephone }}",
+        "message": "=Clinique Dentaire Exemple - Votre rendez-vous a été annulé avec succès. Pour reprendre rendez-vous, appelez-nous du lundi au vendredi de 8h à 17h. Merci!",
+        "options": {}
+      },
+      "id": "4e547eaa-7ecb-4788-a7f8-2da988687dd5"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        544,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $('Code in JavaScript').item.json.toolCallId, result: \"Le rendez-vous a été annulé avec succès et un SMS de confirmation a été envoyé.\" }] }) }}",
+        "options": {}
+      },
+      "id": "6b67cd27-8b35-440c-be72-a7fae6cd9ffc"
+    },
+    {
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const events = $input.all();\nconst dateVoulue = $('Code in JavaScript').first().json.date_rdv || \"\";\n\nif (events.length === 0) {\n return [{ json: { error: \"Aucun rendez-vous trouvé\" } }];\n}\n\nif (events.length === 1) {\n return [events[0]];\n}\n\nconst joursFR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];\nconst moisFR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];\n\nconst lower = dateVoulue.toLowerCase().trim();\n\nfor (const event of events) {\n const eventDate = new Date(event.json.start?.dateTime || event.json.start?.date);\n const eventJour = joursFR[eventDate.getDay()];\n const eventJourNum = eventDate.getDate();\n const eventMois = moisFR[eventDate.getMonth()];\n const eventSummary = (event.json.summary || \"\").toLowerCase();\n const eventDescription = (event.json.description || \"\").toLowerCase();\n\n // 1. Vérifier le nom du jour (lundi, mardi, jeudi...)\n if (lower.includes(eventJour)) {\n return [event];\n }\n\n // 2. Vérifier \"7 mai\", \"11 juin\"...\n if (lower.includes(eventJourNum + ' ' + eventMois)) {\n return [event];\n }\n\n // 3. Vérifier juste le numéro du jour (\"le 7\", \"le 11\")\n const numMatch = lower.match(/\\b(\\d{1,2})\\b/);\n if (numMatch && parseInt(numMatch[1]) === eventJourNum) {\n return [event];\n }\n\n // 4. Vérifier par raison (extraction, blanchiment, nettoyage...)\n if (lower.includes('extraction') && (eventSummary.includes('extraction') || eventDescription.includes('extraction'))) {\n return [event];\n }\n if (lower.includes('blanchiment') && (eventSummary.includes('blanchiment') || eventDescription.includes('blanchiment'))) {\n return [event];\n }\n if (lower.includes('nettoyage') && (eventSummary.includes('nettoyage') || eventDescription.includes('nettoyage'))) {\n return [event];\n }\n if (lower.includes('examen') && (eventSummary.includes('examen') || eventDescription.includes('examen'))) {\n return [event];\n }\n}\n\n// Dernier recours : le plus proche dans le temps\nevents.sort((a, b) => {\n const dateA = new Date(a.json.start?.dateTime || a.json.start?.date);\n const dateB = new Date(b.json.start?.dateTime || b.json.start?.date);\n return dateA - dateB;\n});\nreturn [events[0]];"
+      },
+      "id": "2ecd2c4f-8796-4a5e-b468-b06b2e8cd5e1"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get many events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete an event": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Delete an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,138 @@
+{
+  "name": "Demander Rappel Humain",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -704,
+        -16
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "demander-rappel",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4acb7bef-669d-4549-802e-d57ed91f0e42"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        -16
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\n\nconst nom = body.message?.toolCalls?.[0]?.function?.arguments?.nom || \"\";\nconst telephone = body.message?.toolCalls?.[0]?.function?.arguments?.telephone || \"\";\nconst raison_rappel = body.message?.toolCalls?.[0]?.function?.arguments?.raison_rappel || \"\";\nconst meilleur_moment = body.message?.toolCalls?.[0]?.function?.arguments?.meilleur_moment || \"\";\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\nlet telClean = telephone.replace(/\\D/g, '');\nif (telClean.length === 10) telClean = '1' + telClean;\nif (!telClean.startsWith('+')) telClean = '+' + telClean;\n\n// Créer un événement dans 1 heure pour rappeler le patient\nconst now = new Date();\nconst rappelDate = new Date(now.getTime() + 60 * 60000);\nconst debut = rappelDate.toISOString();\nconst fin = new Date(rappelDate.getTime() + 15 * 60000).toISOString();\n\nreturn [{\n json: {\n nom,\n telephone: telClean,\n raison_rappel,\n meilleur_moment,\n toolCallId,\n debut,\n fin\n }\n}];"
+      },
+      "id": "623d9bf5-5677-484b-93d7-3b9c3811c421"
+    },
+    {
+      "name": "Create an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -208,
+        -16
+      ],
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "start": "={{ $json.debut }}",
+        "end": "={{ $json.fin }}",
+        "additionalFields": {
+          "description": "=Patient: {{ $json.nom }} Téléphone: {{ $json.telephone }} Raison: {{ $json.raison_rappel }} Meilleur moment: {{ $json.meilleur_moment }} Demandé via: Agent IA Cadence Numérique",
+          "summary": "=RAPPEL - {{ $json.nom }} - {{ $json.raison_rappel }}"
+        }
+      },
+      "id": "fb8220b4-0752-4554-a9f3-740b18be98ba"
+    },
+    {
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        48,
+        -16
+      ],
+      "parameters": {
+        "from": "+15555550100",
+        "to": "+15555550199",
+        "message": "=RAPPEL PATIENT - {{ $('Code in JavaScript').first().json.nom }} ({{ $('Code in JavaScript').first().json.telephone }}) demande un rappel. Raison: {{ $('Code in JavaScript').first().json.raison_rappel }}. Meilleur moment: {{ $('Code in JavaScript').first().json.meilleur_moment }}.",
+        "options": {}
+      },
+      "id": "3b968b2a-de9e-4123-a304-890c3a2fe9ac"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        352,
+        -16
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $json.toolCallId, result: \"La demande de rappel a été enregistrée. Un membre de l'équipe rappellera le patient.\" }] }) }}",
+        "options": {}
+      },
+      "id": "a789e4c0-c0ed-42cd-93ca-3e0a12eee9f6"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

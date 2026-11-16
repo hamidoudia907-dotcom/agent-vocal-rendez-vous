@@ -1,0 +1,133 @@
+{
+  "name": "Vérifier Disponibilités",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -512,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verifier-disponibilites",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "96a09d21-bf81-4eba-bf59-0a1acfbd9400"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\n\nconst raison_visite = body.message?.toolCalls?.[0]?.function?.arguments?.raison_visite || \"\";\nconst jour_souhaite = body.message?.toolCalls?.[0]?.function?.arguments?.jour_souhaite || \"\";\nconst moment_souhaite = body.message?.toolCalls?.[0]?.function?.arguments?.moment_souhaite || \"\";\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\nreturn [{\n json: {\n raison_visite,\n jour_souhaite,\n moment_souhaite,\n toolCallId\n }\n}];"
+      },
+      "id": "5b899126-0d89-49ef-b5b7-ba31cb343298"
+    },
+    {
+      "name": "Get many events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "limit": 20,
+        "timeMax": "={{ $now.plus({ months: 6 }) }}",
+        "options": {}
+      },
+      "id": "d50dc386-e1b6-4c81-a3eb-a03272512a48"
+    },
+    {
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const events = $input.all().map(e => e.json);\nconst jourSouhaite = $('Code in JavaScript').first().json.jour_souhaite || \"\";\nconst momentSouhaite = $('Code in JavaScript').first().json.moment_souhaite || \"\";\nconst toolCallId = $('Code in JavaScript').first().json.toolCallId || \"\";\n\nconst joursFR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];\nconst moisFR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];\n\nconst lower = jourSouhaite.toLowerCase().trim();\n\n// Parser une date spécifique (\"26 mai\", \"1er juin\")\nfunction parseDateSpecifique(texte) {\n const t = texte.replace('1er', '1');\n const match = t.match(/(\\d{1,2})\\s+(janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)(?:\\s+(\\d{4}))?/);\n if (match) {\n const jour = parseInt(match[1]);\n const mois = moisFR.indexOf(match[2]);\n const annee = match[3] ? parseInt(match[3]) : new Date().getFullYear();\n return new Date(annee, mois, jour);\n }\n return null;\n}\n\nconst dateSpecifique = parseDateSpecifique(lower);\nlet jourDebut = 1;\nlet jourFin = 180;\n\nif (dateSpecifique) {\n const now = new Date();\n const diff = Math.floor((dateSpecifique - now) / (1000 * 60 * 60 * 24));\n jourDebut = Math.max(1, diff - 1);\n jourFin = diff + 14;\n}\n\nconst jourSemaineDemande = joursFR.findIndex(j => lower.includes(j));\n\nconst disponibilites = [];\n\nfor (let d = jourDebut; d < jourFin; d++) {\n const date = new Date();\n date.setDate(date.getDate() + d);\n const jourNom = joursFR[date.getDay()];\n const jourNum = date.getDay();\n\n if (jourNum === 0 || jourNum === 6) continue;\n if (jourSemaineDemande > 0 && jourNum !== jourSemaineDemande) continue;\n\n const dateStr = date.toISOString().split('T')[0];\n\n // Trouver les RDV existants pour ce jour\n const rdvDuJour = events.filter(ev => {\n if (!ev.start) return false;\n const evDate = (ev.start.dateTime || ev.start.date || \"\").split('T')[0];\n return evDate === dateStr;\n }).map(ev => ({\n debut: new Date(ev.start.dateTime || ev.start.date),\n fin: new Date(ev.end.dateTime || ev.end.date)\n })).sort((a, b) => a.debut - b.debut);\n\n // Calculer les plages libres entre 8h et 17h\n const ouverture = new Date(`${dateStr}T08:00:00`);\n const fermeture = new Date(`${dateStr}T17:00:00`);\n const plagesLibres = [];\n let cursor = ouverture;\n\n for (const rdv of rdvDuJour) {\n if (rdv.debut > cursor) {\n const dureeMin = (rdv.debut - cursor) / 60000;\n if (dureeMin >= 60) {\n plagesLibres.push({\n de: `${String(cursor.getHours()).padStart(2,'0')}h${String(cursor.getMinutes()).padStart(2,'0')}`,\n a: `${String(rdv.debut.getHours()).padStart(2,'0')}h${String(rdv.debut.getMinutes()).padStart(2,'0')}`\n });\n }\n }\n if (rdv.fin > cursor) cursor = rdv.fin;\n }\n\n if (cursor < fermeture) {\n const dureeMin = (fermeture - cursor) / 60000;\n if (dureeMin >= 60) {\n plagesLibres.push({\n de: `${String(cursor.getHours()).padStart(2,'0')}h${String(cursor.getMinutes()).padStart(2,'0')}`,\n a: `${String(fermeture.getHours()).padStart(2,'0')}h${String(fermeture.getMinutes()).padStart(2,'0')}`\n });\n }\n }\n\n // Filtrer par moment souhaité\n const momentLower = momentSouhaite.toLowerCase();\n let plagesFiltrees = plagesLibres;\n if (momentLower.includes('matin')) {\n plagesFiltrees = plagesLibres.filter(p => parseInt(p.de) < 12);\n } else if (momentLower.includes('après-midi') || momentLower.includes('apres-midi') || momentLower.includes('pm')) {\n plagesFiltrees = plagesLibres.filter(p => parseInt(p.a) > 12);\n }\n\n if (plagesFiltrees.length > 0) {\n const plagesTexte = plagesFiltrees.map(p => `de ${p.de} à ${p.a}`).join(' et ');\n disponibilites.push({\n jour: `${jourNom} le ${date.getDate()} ${moisFR[date.getMonth()]}`,\n plages: plagesTexte,\n date_iso: dateStr\n });\n }\n\n if (disponibilites.length >= 5) break;\n}\n\nlet message = \"\";\nif (disponibilites.length === 0) {\n message = \"Aucune disponibilité pour le moment demandé. Voulez-vous essayer un autre jour ou moment ?\";\n} else {\n message = \"Voici les disponibilités : \" + disponibilites.map(d => `${d.jour} : ${d.plages}`).join(' | ') + \". Quel jour et quelle heure vous conviennent ? Vous pouvez choisir n'importe quelle heure dans ces plages.\";\n}\n\nreturn [{\n json: {\n disponibilites,\n message,\n toolCallId\n }\n}];"
+      },
+      "id": "50324ea8-a7c2-421a-9de8-432d55f5d047"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        432,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $('Code in JavaScript1').first().json.toolCallId, result: $('Code in JavaScript1').first().json.message }] }) }}",
+        "options": {}
+      },
+      "id": "31a07054-eef7-4cba-aea2-904a45b5f924"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get many events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

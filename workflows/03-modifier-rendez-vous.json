@@ -1,0 +1,227 @@
+{
+  "name": "Modifier Rendez-vous",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -688,
+        16
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "modifier-rendez-vous",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "67d81566-7271-4a76-a6b4-2aba5677f282"
+    },
+    {
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        16
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.all()[0].json.body;\n\nconst nom = body.message?.toolCalls?.[0]?.function?.arguments?.nom || \"\";\nconst telephone = body.message?.toolCalls?.[0]?.function?.arguments?.telephone || \"\";\nconst date_rendez_vous_actuel = body.message?.toolCalls?.[0]?.function?.arguments?.date_rendez_vous_actuel || \"\";\nconst nouveau_jour = body.message?.toolCalls?.[0]?.function?.arguments?.nouveau_jour || \"\";\nconst nouvelle_heure = body.message?.toolCalls?.[0]?.function?.arguments?.nouvelle_heure || \"\";\nconst toolCallId = body.message?.toolCalls?.[0]?.id || \"\";\n\n// Formater le téléphone avec +1\nlet telClean = telephone.replace(/\\D/g, '');\nif (telClean.length === 10) telClean = '1' + telClean;\nif (!telClean.startsWith('+')) telClean = '+' + telClean;\n\n// Parser l'heure : \"14h00\", \"14:00\", \"9h30\", \"09h00\" -> \"HH:MM\"\nfunction parseHeureFR(texte) {\n let heure = (texte || \"\").replace('h', ':').replace('H', ':');\n if (!heure.includes(':')) heure = heure + ':00';\n const [h, m] = heure.split(':');\n return h.padStart(2, '0') + ':' + (m || '00').padStart(2, '0');\n}\n\n// Parser le jour français en date ISO\nconst joursFR = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];\nconst moisFR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];\n\nfunction parseJourFR(texte) {\n const lower = (texte || \"\").toLowerCase().trim();\n const now = new Date();\n\n // \"2026-05-19\" déjà en ISO\n if (/^\\d{4}-\\d{2}-\\d{2}$/.test(lower)) return lower;\n\n // \"19 mai\", \"19 mai 2026\", \"le 19 mai\"\n const matchDateMois = lower.match(/(\\d{1,2})\\s+(janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)(?:\\s+(\\d{4}))?/);\n if (matchDateMois) {\n const jour = parseInt(matchDateMois[1]);\n const mois = moisFR.indexOf(matchDateMois[2]);\n const annee = matchDateMois[3] ? parseInt(matchDateMois[3]) : now.getFullYear();\n const d = new Date(annee, mois, jour);\n return d.toISOString().split('T')[0];\n }\n\n // \"lundi\", \"mardi prochain\", \"lundi dans 2 semaines\"\n const matchJour = lower.match(/(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)/);\n if (matchJour) {\n const jourCible = joursFR.indexOf(matchJour[1]);\n let diff = jourCible - now.getDay();\n if (diff <= 0) diff += 7;\n\n // \"dans 2 semaines\", \"dans 3 semaines\"\n const matchSemaines = lower.match(/dans\\s+(\\d+)\\s+semaine/);\n if (matchSemaines) {\n diff += (parseInt(matchSemaines[1]) - 1) * 7;\n }\n // \"prochain\" = semaine prochaine si c'est le même jour\n if (lower.includes('prochain') && diff === 7) diff = 7;\n\n const d = new Date(now);\n d.setDate(d.getDate() + diff);\n return d.toISOString().split('T')[0];\n }\n\n // \"demain\"\n if (lower.includes('demain')) {\n const d = new Date(now);\n d.setDate(d.getDate() + 1);\n return d.toISOString().split('T')[0];\n }\n\n // \"aujourd'hui\"\n if (lower.includes(\"aujourd\")) {\n return now.toISOString().split('T')[0];\n }\n\n // Dernier recours : retourner le texte tel quel\n return lower;\n}\n\nconst nouveau_jour_iso = parseJourFR(nouveau_jour);\nconst nouvelle_heure_iso = parseHeureFR(nouvelle_heure);\n\n// Calculer la fin (60 min après)\nconst startDate = new Date(nouveau_jour_iso + 'T' + nouvelle_heure_iso + ':00');\nconst endDate = new Date(startDate.getTime() + 60 * 60000);\nconst pad = (n) => String(n).padStart(2, '0');\nconst nouvelle_fin_iso = pad(endDate.getHours()) + ':' + pad(endDate.getMinutes());\n\nreturn [{\n json: {\n nom,\n telephone: telClean,\n date_rendez_vous_actuel,\n nouveau_jour,\n nouvelle_heure,\n nouveau_jour_iso,\n nouvelle_heure_iso,\n nouvelle_fin_iso,\n toolCallId\n }\n}];"
+      },
+      "id": "818c3738-4e68-48fd-87bc-cca299a7ef70"
+    },
+    {
+      "name": "Get many events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -240,
+        16
+      ],
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "limit": 10,
+        "timeMax": "={{ $now.plus({ months: 3 }) }}",
+        "options": {
+          "query": "={{ $json.telephone.replace('+1','') }}"
+        }
+      },
+      "id": "33ded1ad-80d1-4afa-aeea-fb673823ca4a"
+    },
+    {
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        16
+      ],
+      "parameters": {
+        "jsCode": "const events = $input.all();\nconst dateVoulue = $('Code in JavaScript').first().json.date_rendez_vous_actuel || \"\";\nconst toolCallId = $('Code in JavaScript').first().json.toolCallId || \"\";\n\nif (events.length === 0) {\n return [{ json: { error: \"Aucun rendez-vous trouvé\", toolCallId } }];\n}\n\nif (events.length === 1) {\n return [{ json: { ...events[0].json, toolCallId } }];\n}\n\nconst joursFR = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];\nconst moisFR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];\nconst lower = dateVoulue.toLowerCase().trim();\n\nfor (const event of events) {\n const eventDate = new Date(event.json.start?.dateTime || event.json.start?.date);\n const eventJour = joursFR[eventDate.getDay()];\n const eventJourNum = eventDate.getDate();\n const eventMois = moisFR[eventDate.getMonth()];\n\n if (lower.includes(eventJour)) return [{ json: { ...event.json, toolCallId } }];\n if (lower.includes(eventJourNum + ' ' + eventMois)) return [{ json: { ...event.json, toolCallId } }];\n\n const numMatch = lower.match(/\\b(\\d{1,2})\\b/);\n if (numMatch && parseInt(numMatch[1]) === eventJourNum) return [{ json: { ...event.json, toolCallId } }];\n}\n\n// Par défaut, retourner le plus proche\nevents.sort((a, b) => {\n const dateA = new Date(a.json.start?.dateTime || a.json.start?.date);\n const dateB = new Date(b.json.start?.dateTime || b.json.start?.date);\n return dateA - dateB;\n});\n\nreturn [{ json: { ...events[0].json, toolCallId } }];"
+      },
+      "id": "9a72dad2-0063-48d7-946c-03cbe748f0a3"
+    },
+    {
+      "name": "Delete an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        128,
+        16
+      ],
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "eventId": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "c2569f51-cbd2-4f0e-9cc7-44b2f36959d8"
+    },
+    {
+      "name": "Create an event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        320,
+        16
+      ],
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "courriel@exemple.ca",
+          "mode": "id"
+        },
+        "start": "={{ $('Code in JavaScript').first().json.nouveau_jour_iso }}T{{ $('Code in JavaScript').first().json.nouvelle_heure_iso }}:00",
+        "end": "={{ $('Code in JavaScript').first().json.nouveau_jour_iso }}T{{ $('Code in JavaScript').first().json.nouvelle_fin_iso }}:00",
+        "additionalFields": {
+          "description": "=Patient: {{ $('Code in JavaScript').first().json.nom }} Téléphone: {{ $('Code in JavaScript').first().json.telephone }} Modifié via: Agent IA Cadence Numérique",
+          "summary": "=RDV - {{ $('Code in JavaScript').first().json.nom }} (modifié)"
+        }
+      },
+      "id": "60667d15-88c3-4fde-bbb2-dc86d477db5b"
+    },
+    {
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        496,
+        16
+      ],
+      "parameters": {
+        "from": "+15555550100",
+        "to": "={{ $('Code in JavaScript').first().json.telephone }}",
+        "message": "=Clinique Dentaire Exemple - Votre rendez-vous a été modifié. Nouveau rendez-vous : {{ $('Code in JavaScript').first().json.nouveau_jour }} à {{ $('Code in JavaScript').first().json.nouvelle_heure }}. Merci!",
+        "options": {}
+      },
+      "id": "b6abbc35-f862-4ebd-847d-4ce7a73915e3"
+    },
+    {
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        704,
+        16
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ results: [{ toolCallId: $('Code in JavaScript').first().json.toolCallId, result: \"Le rendez-vous a été modifié avec succès et un SMS de confirmation a été envoyé.\" }] }) }}",
+        "options": {}
+      },
+      "id": "4b67afa2-f8a2-4584-aa31-9c7dfce573a2"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get many events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Delete an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete an event": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
